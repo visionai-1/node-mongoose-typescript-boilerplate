@@ -12,7 +12,7 @@ import { OtpType } from '../utils/enums';
 import { compare, hash } from 'bcrypt';
 import { AuthInterface } from '../interfaces/authInterface';
 import { getRoleName } from '../utils/typeGuards';
-import Logging from '../library/Logging';
+import { Logging } from 'shared/dist'
 
 // Constants for error messages
 const ERROR_MESSAGES = {

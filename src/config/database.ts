@@ -1,5 +1,5 @@
 import mongoose from 'mongoose';
-import Logging from '../library/Logging';
+import { Logging } from 'shared/dist'
 import config from './config';
 
 /**

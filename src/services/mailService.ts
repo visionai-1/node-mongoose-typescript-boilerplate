@@ -1,6 +1,6 @@
 import nodemailer from 'nodemailer';
 import { MailInterface } from '../interfaces';
-import Logging from '../library/Logging';
+import { Logging } from 'shared/dist'
 
 export default class MailService {
     private static instance: MailService;

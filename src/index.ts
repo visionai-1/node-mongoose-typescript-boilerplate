@@ -1,7 +1,7 @@
 import express from 'express';
 import http from 'http';
 import config from './config/config';
-import Logging from './library/Logging';
+import { Logging } from 'shared/dist'
 import DatabaseConnection from './config/database';
 import { router as v1 } from './routes/v1/index';
 import MailService from './services/mailService';
