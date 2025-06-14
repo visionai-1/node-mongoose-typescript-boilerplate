@@ -1,13 +1,12 @@
 import { IUser } from '../interfaces/userInterface';
-import { KeycloakTokenSet } from '../interfaces/keycloakInterface';
-import { isTokenExpired, decodeJWT } from '../utils';
+import { isTokenExpired } from '../utils';
 import { v4 as uuidv4 } from 'uuid';
 
 // ====================================
 // 📝 SESSION INTERFACES
 // ====================================
 
-export interface BaseSession {
+export interface Session {
   sessionId: string;
   userId: string;
   user: IUser;
@@ -16,32 +15,16 @@ export interface BaseSession {
   lastActivity: Date;
   accessCount: number;
   browserInfo?: string;
-  type: 'custom' | 'keycloak';
-}
-
-export interface CustomSession extends BaseSession {
-  type: 'custom';
   accessToken: string;
   refreshToken?: string;
   expiresAt: Date;
 }
 
-export interface KeycloakSession extends BaseSession {
-  type: 'keycloak';
-  tokenSet: KeycloakTokenSet;
-  roles: string[];
-  permissions: string[];
-  expiresAt: Date;
-  refreshExpiresAt?: Date;
-}
-
-export type SessionData = CustomSession | KeycloakSession;
-
 // ====================================
 // 🔧 MODULE STATE - IN-MEMORY SESSION STORE
 // ====================================
 
-let sessions: Map<string, SessionData> = new Map();
+let sessions: Map<string, Session> = new Map();
 let userSessionMappings: Map<string, Set<string>> = new Map();
 let cleanupInterval: NodeJS.Timeout | null = null;
 
@@ -138,7 +121,7 @@ const updateSessionActivity = (sessionId: string): void => {
 // ====================================
 
 /**
- * Create a new user session with custom authentication
+ * Create a new user session
  */
 export const createUserSession = async (
   userId: string,
@@ -151,72 +134,13 @@ export const createUserSession = async (
   const sessionId = uuidv4();
   const now = new Date();
   
-  const session: CustomSession = {
+  const session: Session = {
     sessionId,
     userId,
     user,
-    type: 'custom',
     accessToken,
     refreshToken,
     expiresAt: expiresAt || new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours default
-    isActive: true,
-    createdAt: now,
-    lastActivity: now,
-    accessCount: 0,
-    browserInfo,
-  };
-
-  sessions.set(sessionId, session);
-  addSessionToUserMapping(userId, sessionId);
-  
-  // Start cleanup process if not already started
-  startCleanupProcess();
-  
-  return sessionId;
-};
-
-/**
- * Create a new user session with Keycloak authentication
- */
-export const createKeycloakUserSession = async (
-  userId: string,
-  user: IUser,
-  tokenSet: KeycloakTokenSet,
-  browserInfo?: string
-): Promise<string> => {
-  const sessionId = uuidv4();
-  const now = new Date();
-  
-  // Decode token to get expiration and roles
-  const tokenPayload = decodeJWT(tokenSet.access_token);
-  const expiresAt = new Date(tokenPayload.exp * 1000);
-  const refreshExpiresAt = tokenSet.refresh_expires_in 
-    ? new Date(Date.now() + tokenSet.refresh_expires_in * 1000)
-    : undefined;
-
-  // Extract roles
-  const roles: string[] = [];
-  if (tokenPayload.realm_access?.roles) {
-    roles.push(...tokenPayload.realm_access.roles);
-  }
-  if (tokenPayload.resource_access) {
-    Object.values(tokenPayload.resource_access).forEach((clientAccess: any) => {
-      if (clientAccess.roles) {
-        roles.push(...clientAccess.roles);
-      }
-    });
-  }
-
-  const session: KeycloakSession = {
-    sessionId,
-    userId,
-    user,
-    type: 'keycloak',
-    tokenSet,
-    roles: [...new Set(roles)],
-    permissions: [],
-    expiresAt,
-    refreshExpiresAt,
     isActive: true,
     createdAt: now,
     lastActivity: now,
@@ -240,7 +164,7 @@ export const createKeycloakUserSession = async (
 /**
  * Get active session for a user
  */
-export const getActiveUserSession = async (userId: string): Promise<SessionData | null> => {
+export const getActiveUserSession = async (userId: string): Promise<Session | null> => {
   const userSessions = userSessionMappings.get(userId);
   if (!userSessions) return null;
   
@@ -258,11 +182,11 @@ export const getActiveUserSession = async (userId: string): Promise<SessionData 
 /**
  * Get all sessions for a user
  */
-export const getUserSessions = async (userId: string): Promise<SessionData[]> => {
+export const getUserSessions = async (userId: string): Promise<Session[]> => {
   const userSessions = userSessionMappings.get(userId);
   if (!userSessions) return [];
   
-  const validSessions: SessionData[] = [];
+  const validSessions: Session[] = [];
   
   for (const sessionId of userSessions) {
     const session = sessions.get(sessionId);
@@ -277,7 +201,7 @@ export const getUserSessions = async (userId: string): Promise<SessionData[]> =>
 /**
  * Get session by session ID
  */
-export const getSessionById = async (sessionId: string): Promise<SessionData | null> => {
+export const getSessionById = async (sessionId: string): Promise<Session | null> => {
   const session = sessions.get(sessionId);
   if (!session) return null;
   
@@ -292,14 +216,9 @@ export const getSessionById = async (sessionId: string): Promise<SessionData | n
 /**
  * Find session by access token
  */
-export const getSessionByToken = async (accessToken: string): Promise<SessionData | null> => {
+export const getSessionByToken = async (accessToken: string): Promise<Session | null> => {
   for (const session of sessions.values()) {
-    if (session.type === 'custom' && session.accessToken === accessToken) {
-      if (await isSessionValid(session.sessionId)) {
-        updateSessionActivity(session.sessionId);
-        return session;
-      }
-    } else if (session.type === 'keycloak' && session.tokenSet.access_token === accessToken) {
+    if (session.accessToken === accessToken) {
       if (await isSessionValid(session.sessionId)) {
         updateSessionActivity(session.sessionId);
         return session;
@@ -317,7 +236,7 @@ export const getSessionByToken = async (accessToken: string): Promise<SessionDat
 /**
  * Update session data
  */
-export const updateSession = async (sessionId: string, updates: Partial<SessionData>): Promise<boolean> => {
+export const updateSession = async (sessionId: string, updates: Partial<Session>): Promise<boolean> => {
   const session = sessions.get(sessionId);
   if (!session) return false;
 
@@ -387,16 +306,9 @@ export const isSessionValid = async (sessionId: string): Promise<boolean> => {
 
   // Check token expiration
   try {
-    if (session.type === 'custom') {
-      if (isTokenExpired(session.accessToken)) {
-        removeSessionFromStore(sessionId);
-        return false;
-      }
-    } else if (session.type === 'keycloak') {
-      if (isTokenExpired(session.tokenSet.access_token)) {
-        removeSessionFromStore(sessionId);
-        return false;
-      }
+    if (isTokenExpired(session.accessToken)) {
+      removeSessionFromStore(sessionId);
+      return false;
     }
   } catch (error) {
     removeSessionFromStore(sessionId);
@@ -413,11 +325,7 @@ export const isUserTokenExpired = async (userId: string): Promise<boolean> => {
   const session = await getActiveUserSession(userId);
   if (!session) return true;
 
-  const accessToken = session.type === 'custom' 
-    ? session.accessToken 
-    : session.tokenSet.access_token;
-
-  return isTokenExpired(accessToken);
+  return isTokenExpired(session.accessToken);
 };
 
 /**
@@ -438,13 +346,9 @@ export const getSessionStats = async (): Promise<{
   totalSessions: number;
   activeSessions: number;
   userCount: number;
-  keycloakSessions: number;
-  customSessions: number;
 }> => {
   const now = new Date();
   let activeSessions = 0;
-  let keycloakSessions = 0;
-  let customSessions = 0;
   const userIds = new Set<string>();
 
   for (const session of sessions.values()) {
@@ -453,20 +357,12 @@ export const getSessionStats = async (): Promise<{
     if (session.isActive && session.expiresAt > now) {
       activeSessions++;
     }
-    
-    if (session.type === 'keycloak') {
-      keycloakSessions++;
-    } else {
-      customSessions++;
-    }
   }
 
   return {
     totalSessions: sessions.size,
     activeSessions,
     userCount: userIds.size,
-    keycloakSessions,
-    customSessions,
   };
 };
 
@@ -490,40 +386,22 @@ export const getUserSessionCounts = async (): Promise<{ [userId: string]: number
 /**
  * Extract user info from session
  */
-export const getUserFromSession = (session: SessionData): IUser => {
+export const getUserFromSession = (session: Session): IUser => {
   return session.user;
 };
 
 /**
  * Get access token from session
  */
-export const getAccessTokenFromSession = (session: SessionData): string => {
-  return session.type === 'custom' 
-    ? session.accessToken 
-    : session.tokenSet.access_token;
+export const getAccessTokenFromSession = (session: Session): string => {
+  return session.accessToken;
 };
 
 /**
  * Get refresh token from session
  */
-export const getRefreshTokenFromSession = (session: SessionData): string | undefined => {
-  return session.type === 'custom' 
-    ? session.refreshToken 
-    : session.tokenSet.refresh_token;
-};
-
-/**
- * Check if session is Keycloak session
- */
-export const isKeycloakSession = (session: SessionData): session is KeycloakSession => {
-  return session.type === 'keycloak';
-};
-
-/**
- * Check if session is custom session
- */
-export const isCustomSession = (session: SessionData): session is CustomSession => {
-  return session.type === 'custom';
+export const getRefreshTokenFromSession = (session: Session): string | undefined => {
+  return session.refreshToken;
 };
 
 // ====================================
@@ -554,7 +432,7 @@ export const initializeUserService = (): void => {
  * Compose session validation with action execution
  */
 export const withSessionValidation = <T>(
-  action: (session: SessionData) => Promise<T>
+  action: (session: Session) => Promise<T>
 ) => async (sessionId: string): Promise<T | null> => {
   const session = await getSessionById(sessionId);
   if (!session) return null;
@@ -569,7 +447,7 @@ export const withSessionValidation = <T>(
  * Compose user session lookup with action execution
  */
 export const withUserSession = <T>(
-  action: (session: SessionData) => Promise<T>
+  action: (session: Session) => Promise<T>
 ) => async (userId: string): Promise<T | null> => {
   const session = await getActiveUserSession(userId);
   if (!session) return null;
@@ -581,8 +459,8 @@ export const withUserSession = <T>(
  * Create a session filter function
  */
 export const createSessionFilter = (
-  predicate: (session: SessionData) => boolean
-) => (sessions: SessionData[]): SessionData[] => {
+  predicate: (session: Session) => boolean
+) => (sessions: Session[]): Session[] => {
   return sessions.filter(predicate);
 };
 
@@ -590,8 +468,8 @@ export const createSessionFilter = (
  * Session mapper function
  */
 export const mapSessions = <T>(
-  mapper: (session: SessionData) => T
-) => (sessions: SessionData[]): T[] => {
+  mapper: (session: Session) => T
+) => (sessions: Session[]): T[] => {
   return sessions.map(mapper);
 };
 
@@ -605,26 +483,6 @@ export const pipe = <T, U>(fn1: (arg: T) => U) => (value: T): U => fn1(value);
  */
 export const compose = <T>(...fns: Array<(arg: any) => any>) => (value: T) =>
   fns.reduce((acc, fn) => fn(acc), value);
-
-/**
- * Session data pipeline - example of functional composition
- */
-export const createSessionPipeline = () => {
-  const filterActiveSessions = createSessionFilter(session => session.isActive);
-  const filterKeycloakSessions = createSessionFilter(isKeycloakSession);
-  const mapToUserIds = mapSessions(session => session.userId);
-  
-  const getActiveKeycloakUserIds = (sessions: SessionData[]): string[] => {
-    return mapToUserIds(filterKeycloakSessions(filterActiveSessions(sessions)));
-  };
-  
-  return {
-    filterActiveSessions,
-    filterKeycloakSessions,
-    mapToUserIds,
-    getActiveKeycloakUserIds,
-  };
-};
 
 // ====================================
 // 📦 LEGACY COMPATIBILITY
@@ -650,7 +508,6 @@ export const isTokenExpiredForUser = isUserTokenExpired;
 const UserServiceAPI = {
   // Core session functions
   createUserSession,
-  createKeycloakUserSession,
   getActiveUserSession,
   getUserSessions,
   getSessionById,
@@ -673,8 +530,6 @@ const UserServiceAPI = {
   getUserFromSession,
   getAccessTokenFromSession,
   getRefreshTokenFromSession,
-  isKeycloakSession,
-  isCustomSession,
   
   // Functional composition helpers
   withSessionValidation,
@@ -683,7 +538,6 @@ const UserServiceAPI = {
   mapSessions,
   pipe,
   compose,
-  createSessionPipeline,
   
   // System functions
   resetUserService,

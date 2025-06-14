@@ -42,7 +42,14 @@ const StartServer = async () => {
         // UserService will be initialized automatically when AxiosService starts
         Logging.info('✅ User Session Service ready');
 
-        initializeAxiosService();
+        initializeAxiosService({
+          baseURL: process.env.API_BASE_URL || 'http://localhost:3000/api',
+          timeout: 30000,
+          defaultHeaders: {
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+          }
+        });
 
         //MAIL SMTP CONNECTION
         Logging.info('📧 Connecting with SMTP Server...');

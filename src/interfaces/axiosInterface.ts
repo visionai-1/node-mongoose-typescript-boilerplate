@@ -18,6 +18,7 @@ export interface AxiosInterceptorConfig {
   baseURL: string;
   timeout?: number;
   defaultHeaders?: Record<string, string>;
+  validateStatus?: (status: number) => boolean;
 }
 
 export interface TokenRefreshResponse {
